@@ -1,0 +1,36 @@
+# 인증 정보 (절대 커밋 금지)
+credentials.json
+token.json
+*.key
+*.pem
+.env
+
+# 생성된 출력 파일 (event_names_config.json 은 포함)
+output/*.xlsx
+output/raw_sheet_data.json
+output/historical_event_names.json
+output/draft_events.json
+output/confirmed_events.json
+output/run_log.json
+output/debug_cells.json
+
+# 소스 원본 문서 (업무 내부 자료)
+Readdocs/
+
+# Python 캐시
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# 가상환경
+venv/
+.venv/
+env/
+
+# 아티팩트
+=3.1.0
+*.log
+.DS_Store
+Thumbs.db
