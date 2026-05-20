@@ -24,9 +24,17 @@ DEFAULT_SOURCE = (
 )
 OUTPUT_DIR = Path("output")
 
+GENRES = [
+    "핵앤슬래시", "FPS", "TPS",
+    "MMORPG", "턴제", "전략", "RTS", "MOBA", "AOS",
+    "시뮬레이션", "어드벤처", "퍼즐", "스포츠", "리듬",
+    "로그라이크", "덱빌딩",
+    "직접 입력",
+]
+
 # ── 페이지 설정 ──────────────────────────────────────────────────────────────
-st.set_page_config(page_title="이벤트 탭 생성기", page_icon="⚾", layout="wide")
-st.title("⚾ 이벤트 탭 생성기")
+st.set_page_config(page_title="이벤트 탭 생성기", layout="wide")
+st.title("이벤트 탭 생성기")
 st.caption(
     "Claude.ai에서 이벤트 명칭을 제안받아 xlsx를 자동 생성합니다. "
     "Anthropic API 키 불필요."
@@ -50,8 +58,50 @@ if st.button("📂 파일 확인"):
         st.error(f"파일을 찾을 수 없습니다:\n{source_path}")
 
 
-# ── ② 탭 설정 (고급) ─────────────────────────────────────────────────────────
-with st.expander("② 탭 설정 보기/편집 (고급)", expanded=False):
+# ── ② 장르 및 키워드 설정 ────────────────────────────────────────────────────
+st.header("② 장르 및 키워드 설정")
+
+col_genre, col_custom = st.columns([1, 2])
+
+with col_genre:
+    selected_genre = st.selectbox(
+        "게임 장르",
+        options=GENRES,
+        index=12,  # 기본값: 스포츠
+        help="이벤트 제목 키워드 추천 및 event_names_config에 반영됩니다.",
+    )
+
+with col_custom:
+    custom_genre_input = ""
+    if selected_genre == "직접 입력":
+        custom_genre_input = st.text_input(
+            "장르 직접 입력",
+            placeholder="예: 배틀로얄, 서바이벌 등",
+        )
+
+genre = custom_genre_input.strip() if selected_genre == "직접 입력" else selected_genre
+
+st.markdown("**이벤트 제목 키워드**")
+st.caption(
+    "이벤트 명칭 생성에 사용할 키워드를 쉼표로 구분해 입력하세요.  \n"
+    "비워두면 Claude.ai에게 키워드 추천을 요청하거나 아래 명칭 설정에서 직접 지정할 수 있습니다."
+)
+keywords_input = st.text_area(
+    "키워드 목록 (쉼표 구분)",
+    placeholder="예: 전반기, 올스타, 홈런, 만루, 끝내기, 한여름, 개막",
+    height=80,
+    label_visibility="collapsed",
+)
+genre_phrases = [k.strip() for k in keywords_input.split(",") if k.strip()]
+
+if genre:
+    badge = f"`{genre}`"
+    kw_badge = f"  |  키워드 {len(genre_phrases)}개 설정됨" if genre_phrases else ""
+    st.info(f"선택된 장르: {badge}{kw_badge}")
+
+
+# ── ③ 탭 설정 (고급) ─────────────────────────────────────────────────────────
+with st.expander("③ 탭 설정 보기/편집 (고급)", expanded=False):
     st.caption(
         "기본값: **260611** (← 260528), **260618** (← 260604) 탭을 생성합니다.  \n"
         "다른 탭을 생성하려면 아래 JSON을 직접 수정하세요."
@@ -84,14 +134,16 @@ with st.expander("② 탭 설정 보기/편집 (고급)", expanded=False):
         custom_updates = updates_for_display
 
 
-# ── ③ 이벤트 명칭 설정 ───────────────────────────────────────────────────────
-st.header("③ 이벤트 명칭 설정 (선택)")
+# ── ④ 이벤트 명칭 설정 ───────────────────────────────────────────────────────
+st.header("④ 이벤트 명칭 설정 (선택)")
 
+_genre_hint = genre if genre else "야구"
+_kw_hint = ", ".join(genre_phrases[:4]) if genre_phrases else "전반기, 올스타, 홈런"
 st.info(
     "**Claude.ai 에서 이벤트명을 제안받아 아래에 붙여넣으세요.**\n\n"
     "Claude.ai 에 이렇게 요청하세요:\n"
-    "> \"260611, 260618 탭의 이벤트 명칭을 야구/6월 테마로 제안해줘. "
-    "event_names_config.json 형식으로 출력해줘.\"\n\n"
+    f"> \"260611, 260618 탭의 이벤트 명칭을 {_genre_hint}/6월 테마로 제안해줘. "
+    f"키워드: {_kw_hint}. event_names_config.json 형식으로 출력해줘.\"\n\n"
     "비워두면 날짜·이달의 선수팩 패턴 치환만 적용됩니다."
 )
 
@@ -124,9 +176,18 @@ if event_config_str.strip():
         st.error(f"JSON 파싱 오류: {e}")
         event_name_cfg = None
 
+# 장르·키워드를 event_name_cfg에 병합 (JSON 붙여넣기 여부와 무관하게 반영)
+if genre or genre_phrases:
+    if event_name_cfg is None:
+        event_name_cfg = {}
+    if genre:
+        event_name_cfg.setdefault("genre", genre)
+    if genre_phrases:
+        event_name_cfg.setdefault("genre_phrases", genre_phrases)
 
-# ── ④ xlsx 생성 ──────────────────────────────────────────────────────────────
-st.header("④ xlsx 생성")
+
+# ── ⑤ xlsx 생성 ──────────────────────────────────────────────────────────────
+st.header("⑤ xlsx 생성")
 
 if st.button("🚀 xlsx 생성하기", type="primary", use_container_width=True):
     if not Path(source_path).exists():
