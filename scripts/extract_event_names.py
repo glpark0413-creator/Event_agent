@@ -18,20 +18,46 @@ import openpyxl
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
 sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
 
-SOURCE = r"C:\Users\glpark0413_pc\Desktop\업무 자동화\Event_Agent\Readdocs\[FB_GL] 2026 라이브 이벤트.xlsx"
+# ─── 현재 프로젝트 설정 로드 (crawl_gdrive_project.py 가 생성) ─────────────
+_BASE_DIR = Path(__file__).resolve().parent.parent
+_CURRENT_PROJECT_FILE = _BASE_DIR / "output" / "json" / "current_project.json"
+_NC_KR_FALLBACK = str(_BASE_DIR / "Readdocs" / "[NC_KR] 라이브 이벤트 문서.xlsx")
+
+def _resolve_source() -> str:
+    """current_project.json 에서 source_xlsx 읽기. 없으면 NC_KR 레거시 경로 반환."""
+    if _CURRENT_PROJECT_FILE.exists():
+        try:
+            cfg = json.loads(_CURRENT_PROJECT_FILE.read_text(encoding="utf-8"))
+            p = cfg.get("source_xlsx", "")
+            if p and Path(p).exists():
+                return p
+        except Exception:
+            pass
+    return _NC_KR_FALLBACK
+
+SOURCE = _resolve_source()
+
+import sys as _sys
+_sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _project_config import load_project_paths as _load_paths
+
+_paths = _load_paths()
+
 OUTPUT_DIR = Path("output")
-OUTPUT_FILE = OUTPUT_DIR / "historical_event_names.json"
+OUTPUT_JSON_DIR = OUTPUT_DIR / "json"
+# 프로젝트별 경로 우선, 없으면 레거시 경로 사용
+OUTPUT_FILE = _paths.hist_event_names if _paths else OUTPUT_JSON_DIR / "historical_event_names.json"
 
 # B열의 번호 섹션 패턴: "1.", "2.", "3." 등으로 시작
 SECTION_PATTERN = re.compile(r"^\d+\.")
 
-# 시즌·월 키워드 감지 패턴
+# 시즌·월 키워드 감지 패턴 (공통 + 장르별)
 SEASON_RE = re.compile(
-    r"(얼리썸머|초여름|한여름|늦여름|쿨 서머|쿨서머|"
-    r"봄날|봄의|여름의|가을의|겨울의|"
-    r"새해|신년|설날|추석|골든위크|어린이날|광복절|한글날|크리스마스|핼러윈|"
-    r"개막|올스타|포스트시즌|일본시리즈|월드시리즈|"
-    r"\d+월의|\d+월 )"
+    r"(봄의|여름의|가을의|겨울의|한여름|초여름|얼리썸머|"
+    r"새해|신년|설날|추석|크리스마스|핼러윈|기념|축제|"
+    r"각성|전설|영웅|봉인|결전|"
+    r"전반기|올스타|후반기|포스트시즌|개막|시즌|"
+    r"\d+주년|\d+월의|\d+월 )"
 )
 
 
@@ -65,7 +91,10 @@ def extract_section_titles(ws) -> list[dict]:
 
 
 def main():
+    if _paths:
+        _paths.ensure_dirs()
     OUTPUT_DIR.mkdir(exist_ok=True)
+    OUTPUT_JSON_DIR.mkdir(exist_ok=True)
 
     wb = openpyxl.load_workbook(SOURCE)
     tabs = []

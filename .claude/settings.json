@@ -1,0 +1,23 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(ls \"c:\\\\Users\\\\glpark0413\\\\Desktop\\\\���� �ڵ�ȭ-20260521T024618Z-3-001\\\\���� �ڵ�ȭ\\\\�� ����\\\\Event_Agent\\\\output\\\\\")",
+      "PowerShell(Get-ChildItem -Path \"c:\\\\Users\\\\glpark0413\\\\Desktop\\\\업무 자동화-20260521T024618Z-3-001\\\\업무 자동화\\\\실 업무\\\\Event_Agent\" -Recurse | Select-Object FullName, @{Name=\"Type\"; Expression={if\\($_.PSIsContainer\\){\"DIR\"}else{\"FILE\"}}} | Sort-Object FullName | Format-Table -AutoSize)",
+      "PowerShell(Get-ChildItem -Path \"c:\\\\Users\\\\glpark0413\\\\Desktop\\\\업무 자동화-20260521T024618Z-3-001\\\\업무 자동화\\\\실 업무\\\\Event_Agent\\\\.claude\\\\skills\" -Recurse -File | Select-Object FullName | ForEach-Object { $_.FullName })",
+      "PowerShell(C:\\\\Users\\\\glpark0413\\\\AppData\\\\Local\\\\Programs\\\\Python\\\\Python312\\\\python.exe scripts/load_project_learning.py --list)",
+      "PowerShell(C:\\\\Users\\\\glpark0413\\\\AppData\\\\Local\\\\Programs\\\\Python\\\\Python312\\\\python.exe scripts/load_project_learning.py --project-id FB_GL --summary)",
+      "PowerShell(C:\\\\Users\\\\glpark0413\\\\AppData\\\\Local\\\\Programs\\\\Python\\\\Python312\\\\python.exe scripts/create_tabs.py)",
+      "PowerShell(C:\\\\Users\\\\glpark0413\\\\AppData\\\\Local\\\\Programs\\\\Python\\\\Python312\\\\python.exe scripts/extract_event_names.py)",
+      "PowerShell(C:\\\\Users\\\\glpark0413\\\\AppData\\\\Local\\\\Programs\\\\Python\\\\Python312\\\\python.exe scripts/scan_rewards_by_event.py)",
+      "PowerShell(C:\\\\Users\\\\glpark0413\\\\AppData\\\\Local\\\\Programs\\\\Python\\\\Python312\\\\python.exe scripts/save_learning.py)"
+    ]
+  },
+  "allowedTools": [
+    "Bash",
+    "Edit",
+    "Write",
+    "Read",
+    "Glob",
+    "Grep"
+  ]
+}
