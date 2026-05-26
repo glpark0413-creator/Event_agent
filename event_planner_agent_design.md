@@ -316,27 +316,185 @@ python scripts/analyze_event_patterns.py \
 
 ---
 
-#### 이벤트 보상 수정
+#### 이벤트 보상 수정 (이벤트별 순차 검토)
 
 이벤트 제목·날짜·명칭 수정 완료 직후 실행한다.
 
-| 단계 | 내용 |
+| 항목 | 내용 |
 |------|------|
-| **보상 명칭 입력** | AskUserQuestion: `보상 명칭 직접 입력` / `없음` |
-| **보상 수량 분석** | xlsx 소스의 모든 날짜형 탭 스캔 → 보상 유형별 평균 산출 |
-| **수량 적용 확인** | AskUserQuestion: `평균 수량 적용` / `직접 수정` / `수량 유지` |
-| **xlsx 재저장** | 보상 수정 내역 반영 후 output 파일 덮어쓰기 |
+| **처리 주체** | 스크립트(보상 스캔·추천) + LLM(비교 제시) + 요청자(섹션별 승인) |
+| **진입 조건** | 이벤트 명칭 자동 갱신 완료 직후 |
+| **출력** | 승인된 보상 수량·아이템명이 반영된 output xlsx |
 
-**보상 수량 분석 출력 형식**:
+**실행 순서**
+
+1. **역사적 보상 패턴 스캔** — 소스 xlsx 전체 탭 학습:
+   ```
+   python scripts/scan_rewards_by_event.py
+   ```
+   - 출력: `output/projects/{project_id}/work/reward_by_event.json`
+   - 모든 날짜형 탭의 이벤트 섹션별 보상 구성·수량·셀 좌표 수집
+
+2. **신규 탭 현재 보상 스캔** — 생성된 output xlsx 스캔:
+   ```
+   python scripts/scan_rewards_by_event.py "{output_xlsx}" output/projects/{project_id}/work/reward_new_tabs.json
+   ```
+   - 출력: `output/projects/{project_id}/work/reward_new_tabs.json`
+
+3. **보상 추천 생성**:
+   ```
+   python scripts/recommend_rewards.py
+   ```
+   - 출력: `output/projects/{project_id}/work/reward_recommendation.json`
+   - 유사 이벤트 비교 → 수량 상향/하향 권장 + 아이템명 변경 권장
+   - **액션 유형**: `유지` / `상향_권장` / `하향_검토` / `명칭_검토` / `명칭_변경_권장`
+
+4. **순차 리뷰 큐 생성**:
+   ```
+   python scripts/_prep_sequential_review.py
+   ```
+   - 출력: `output/projects/{project_id}/work/reward_review_queue.json`
+   - 이벤트 섹션을 `global_idx` 순서로 플랫하게 정렬
+
+5. **이벤트별 순차 보상 검토** — 섹션 1개씩 순서대로 제시 (`recommend_rewards.py --per-event`):
+
+   ```
+   ════════════════════════════════════════════════════════════════════
+   [보상 추천] {탭명} 탭  (참조: {참조탭} / 이력 N개 탭)
+   ════════════════════════════════════════════════════════════════════
+
+    [{n}/{전체}] {이벤트 제목}
+     유형: {event_type}  │  유사: {similar_tab1}, {similar_tab2}, ...
+     ────────────────────────────────────────────────────────────────
+     보상 아이템                    │      현재 │     이력avg │ 추천
+     ────────────────────────────────────────────────────────────────
+     골드                           │   500,000 │ 600,000(6탭) │ ✅ 유지
+     15-26 리그 선택 다이아 확정 팩  │    (팩형) │           — │ 📝 명칭_변경_권장
+     다이아                         │        30 │    50(5탭)   │ ↑ 상향_권장
+     ────────────────────────────────────────────────────────────────
+   ```
+
+   **순서 이슈 감지 시 추가 표시** (Kendall-tau 일치율 < 0.75):
+   ```
+    [{n}/{전체}] {이벤트 제목}
+     유형: {event_type}  │  유사: {similar_tabs}
+     🔄 순서 변경 권장 ({보상유형|아이템명} 일치율 {N}%)
+        현재  : 다이아 → 강화권 → 선수 카드 → 골드
+        권장  : 골드 → 선수 카드 → 다이아 → 강화권
+     ────────────────────────────────────────────────────────────────
+     보상 아이템                    │      현재 │     이력avg │ 추천
+     ────────────────────────────────────────────────────────────────
+     다이아                         │        30 │    50(5탭)   │ ↑ 상향_권장 🔄
+     강화권 (A)                     │       500 │  154(5탭)    │ ✅ 유지 🔄
+     ────────────────────────────────────────────────────────────────
+     ↳ 권장 순서 (보상유형 기준, N개 아이템)
+     ──────────────────────────────────────
+      1. 골드                          500,000
+      2. 선수 카드 팩 티켓                  10
+      3. 다이아                             30
+      4. 강화권 (A)                        500
+     ──────────────────────────────────────
+   ```
+
+   **전체 탭 요약** (탭 끝에 출력):
+   ```
+   ════════════════════════════════════════════════════════════════════
+   [보상 수량·명칭 변경 권장] — {N}건
+     섹션1 다이아  ↑ 현재 30 < 유사 5탭 평균 50 (-40%)
+   [보상 순서 변경 권장] — {N}개 섹션        ← 순서 이슈 있을 때만
+     섹션3 {이벤트명}  🔄 일치율 62%  (다이아, 강화권, 선수 카드, 골드)
+   ════════════════════════════════════════════════════════════════════
+   → 수정 방법:
+      '섹션번호 아이템명 수량'      예) '1 골드 600000'
+      '섹션번호 순서 적용'          예) '3 순서 적용' — 권장 순서로 xlsx 재배열
+      '권장'  — ↑/↓ 수량 권장 항목 일괄 적용
+      '전체 승인'  |  '건너뜀'
+   ```
+
+   **판정(action) 유형**:
+
+   | 판정 아이콘 | action | 의미 | 처리 |
+   |---|---|---|---|
+   | ✅ | `유지` | 변경 불필요 | 기본 유지 |
+   | ↑ | `상향_권장` | 역사 평균 대비 수량 부족 | 추천 수량으로 상향 권장 |
+   | ↓ | `하향_검토` | 역사 평균 대비 수량 초과 | 하향 검토 권장 |
+   | 📝 | `명칭_검토` | 시즌 연도 패턴(`NN-NN`) 포함, 이력 대안 없음 | 요청자가 수동으로 새 이름 직접 입력 |
+   | 📝 | `명칭_변경_권장` | 이력 기반 자동 추천명 존재 | `suggested_name`으로 변경 권장 |
+
+6. **응답별 처리**:
+
+   | 응답 | 처리 |
+   |---|---|
+   | `"승인"` | 현재 섹션의 모든 권장 변경(↑↓ + 📝명칭_변경_권장) 적용 |
+   | `"권장"` | `상향_권장` / `하향_검토` / `명칭_변경_권장` 항목 전부 적용 |
+   | `"이름 3번: 새이름"` | 해당 번호 보상 아이템명 직접 변경 |
+   | `"이름 변경"` | 모든 `명칭_검토`/`명칭_변경_권장` 항목에 `suggested_name` 적용 |
+   | `"아이템명: 구이름 → 새이름"` | 구이름과 일치하는 보상 명칭 일괄 변경 |
+   | `"수량 3번=80"` | 해당 번호 보상 수량 직접 수정 |
+   | `"{섹션번호} 순서 적용"` | 해당 섹션의 권장 순서로 xlsx 보상 행 재배열 (openpyxl) |
+   | `"건너뜀"` | 현재 섹션 변경 없이 다음으로 |
+
+   > **📝 명칭_검토 항목**: `suggested_name`이 없어 자동 추천 불가. 요청자가 `"이름 N번: 새이름"` 형식으로 직접 입력해야 한다.
+   > - 예: 시즌 연도 "15-26" → "26-27" 변경 시 → `"이름 2번: 26-27 리그 선택 다이아 확정 팩"` 입력
+   >
+   > **🔄 순서 이슈 항목**: `"N 순서 적용"` 응답 시 `order_type.recommended_rows` 또는 `order_name.recommended_rows`를 기준으로 xlsx 해당 섹션의 보상 행을 재배열한다.
+
+7. **xlsx 보상 수량·명칭 갱신** — 승인된 변경 사항을 output xlsx에 반영:
+   ```
+   python scripts/apply_reward_changes.py --xlsx "{output_xlsx}" --changes "{changes_json}"
+   ```
+   - 수량 변경: `qty_cell` 좌표에 새 수량 직접 기록 (openpyxl)
+   - 명칭 변경: `item_cell` 좌표에 새 이름 직접 기록 (openpyxl)
+   - 변경 0건 시 xlsx 재저장 생략
+
+**보상 아이템명 자동 추천 로직** (`recommend_rewards.py` 내 `find_suggested_name()`)
+
+| 조건 | 결과 |
+|---|---|
+| 현재 이름에 시즌 연도 패턴(`NN-NN`) 포함 + 이력에 다른 연도 버전 존재 | `명칭_변경_권장` + `suggested_name` 자동 설정 |
+| 현재 이름에 시즌 연도 패턴 포함 + 이력에 같은 연도만 존재 | `명칭_검토` + `suggested_name=None` |
+| 시즌 연도 패턴 없음 | 자동 추천 안 함 (비시즌 항목 오탐 방지) |
+
+> **⚠ 비시즌 유사도 매칭 비활성**: `reward_type` 기반 유사도 매칭은 "선수 카드 (일반/고급/최상급)" 등 티어 간 오탐을 유발하므로 현재 비활성화 상태. 시즌 연도 패턴 항목만 자동 추천된다.
+
+---
+
+**보상 순서 패턴 학습 로직** (`recommend_rewards.py` 내 `build_canonical_reward_sequence()` / `analyze_reward_order()`)
+
+보상 아이템의 **나열 순서**가 이력 패턴과 일치하는지 자동 감지하고, 권장 순서를 제안한다.
+
+**분석 레벨 (이중 적용)**
+
+| 레벨 | 키 | 적용 조건 |
+|---|---|---|
+| `reward_type` (보상유형) | 예) `골드`, `선수 카드`, `강화권` | 모든 섹션 |
+| 정규화 아이템명 (시즌 연도 제거 후 앞 30자) | 예) `리그 선택 다이아 확정 팩` | 보상 수 ≤ 20행인 섹션 |
+
+name 수준에서 이슈 감지 시 name 분석을 우선 표시; 없으면 type 수준 표시.
+
+**정식 순서(Canonical Sequence) 학습 알고리즘** (`build_canonical_reward_sequence`)
+
+1. 유사 이벤트 섹션(동일 `event_type` + 제목 유사도 상위 N개)에서 각 키의 **첫 등장 상대 위치** (0.0 = 맨 앞, 1.0 = 맨 뒤)를 수집
+2. 전체 유사 섹션의 **절반 이상**에서 관찰된 키만 채택
+3. 키를 **평균 상대 위치 오름차순**으로 정렬 → 정식 순서 반환
+
+**순서 일치율 계산** (`analyze_reward_order`) — Kendall-tau 쌍 순서 일치율
+
 ```
-[보상 수량 분석 결과]
-─────────────────────────────────────────
-보상 유형      | 탭별 수치 범위      | 적용 평균값
-다이아         | 30 ~ 100 개        | 50 개
-골드           | 5,000 ~ 50,000     | 20,000
-픽업팩         | 1 ~ 3 개           | 2 개
-─────────────────────────────────────────
+일치율 = (현재 순서에서 정식 순서와 방향이 같은 쌍 수) / (전체 쌍 수)
+임계값 < 0.75 → has_order_issue = True → 🔄 순서 변경 권장
 ```
+
+| 반환 필드 | 타입 | 설명 |
+|---|---|---|
+| `match_score` | float | Kendall-tau 쌍 일치율 (0~1) |
+| `has_order_issue` | bool | True = 순서 변경 권장 |
+| `current_type_seq` | [str] | 현재 키 첫 등장 순서 |
+| `canonical_type_seq` | [str] | 이력 정식 순서 (현재에 없는 키 제외 + 신규 키 뒤에 추가) |
+| `out_of_order` | [(key, cur_rank, rec_rank), ...] | 자리 이탈 항목 목록 |
+| `recommended_rows` | [rr, ...] | 권장 순서로 재배열된 보상 행 (같은 키 그룹 내 원본 상대 순서 유지) |
+
+> **⚠ 적용 제외 조건**: 보상 행이 3개 미만이거나 정식 순서를 학습할 유사 섹션이 없는 경우 `match_score=1.0`, `has_order_issue=False`로 반환 (변경 없음).
 
 ---
 
@@ -422,7 +580,18 @@ DONE
   ├── CLAUDE.md                          # 메인 에이전트 지침 (오케스트레이터)
   ├── app.py                             # Streamlit 웹 UI (API 키 불필요 모드)
   ├── /scripts
-  │   └── create_tabs.py                 # xlsx 탭 생성 스크립트
+  │   ├── create_tabs.py                 # xlsx 탭 생성 스크립트
+  │   ├── scan_rewards_by_event.py       # 이벤트별 보상 패턴 스캔 (소스 + 신규 탭)
+  │   ├── recommend_rewards.py           # 보상 수량·아이템명 추천 생성
+  │   ├── _prep_sequential_review.py     # 순차 리뷰 큐(reward_review_queue.json) 생성
+  │   ├── apply_reward_changes.py        # 승인된 보상 변경 xlsx 반영 (수량 + 명칭)
+  │   ├── analyze_event_patterns.py      # 이벤트 유형 빈도 갭 분석
+  │   ├── extract_event_names.py         # 기존 탭 이벤트 명칭 패턴 추출
+  │   ├── upload_to_gsheets.py           # Google Sheets 업로드
+  │   ├── crawl_gdrive_project.py        # Google Drive xlsx 크롤링 및 학습 데이터 생성
+  │   ├── load_project_learning.py       # 프로젝트별 학습 데이터 로드
+  │   ├── save_learning.py               # 실행 결과 누적 학습 저장
+  │   └── _project_config.py             # 프로젝트별 경로 설정 (ProjectPaths)
   ├── /.claude
   │   ├── /skills
   │   │   ├── /sheets-reader             # Google Sheets / xlsx 읽기
@@ -450,14 +619,27 @@ DONE
   ├── /Readdocs
   │   └── [FB_GL] 2026 라이브 이벤트.xlsx  # 소스 xlsx (읽기 전용)
   ├── /output
-  │   ├── template.json                    # Phase 1 산출물
-  │   ├── history_stats.json               # Phase 1 산출물
-  │   ├── draft_events.json                # Phase 2 산출물
-  │   ├── confirmed_events.json            # Phase 3 산출물
-  │   ├── event_names_config.json          # 장르·키워드·이벤트명 치환 설정
-  │   ├── historical_event_names.json      # 기존 탭 이벤트명 패턴 추출 결과
-  │   ├── event_pattern_analysis.json      # 이벤트 유형별 역사 등장률 + 신규 탭 갭 분석
-  │   └── run_log.json                     # 전체 실행 로그
+  │   ├── /projects
+  │   │   └── /{project_id}
+  │   │       ├── /learning               # 세션 간 유지 — 크롤링·학습 누적 데이터
+  │   │       │   ├── agent_learning.json
+  │   │       │   ├── reward_by_event.json
+  │   │       │   └── event_pattern_analysis.json
+  │   │       ├── /work                   # 세션 작업 파일 (매 실행 재생성)
+  │   │       │   ├── reward_by_event.json          # 소스 탭 이벤트별 역사 보상 패턴
+  │   │       │   ├── reward_new_tabs.json           # 신규 탭 현재 보상 구성·셀 좌표
+  │   │       │   ├── reward_recommendation.json     # 보상 추천 결과 (action + suggested_qty/name)
+  │   │       │   ├── reward_review_queue.json       # 순차 리뷰 큐 (global_idx 정렬)
+  │   │       │   ├── event_names_config.json
+  │   │       │   └── event_pattern_analysis.json
+  │   │       └── /file                   # 최종 출력 xlsx
+  │   └── /json                           # 레거시·공통 작업 파일
+  │       ├── template.json               # Phase 1 산출물
+  │       ├── history_stats.json          # Phase 1 산출물
+  │       ├── draft_events.json           # Phase 2 산출물
+  │       ├── confirmed_events.json       # Phase 3 산출물
+  │       ├── historical_event_names.json # 기존 탭 이벤트명 패턴 추출 결과
+  │       └── run_log.json                # 전체 실행 로그
   └── /docs
       └── google_auth_setup.md           # Google API 인증 설정 가이드
 ```
@@ -495,6 +677,14 @@ DONE
 | `review-conductor` | Phase 3 인터랙션 진행 및 수정 사항 반영 | Phase 3 시작 시, 요청자 응답마다 |
 | `sheets-writer` | 확정 데이터를 신규 Google Sheets / xlsx에 기록 | Phase 4 시작 시 (전체 확정 후) |
 | `create_tabs.py` | xlsx 탭 복사 + 날짜·명칭·보상 치환 | 이벤트 시트 직접 생성 요청 시 |
+| `scan_rewards_by_event.py` | 이벤트 섹션별 보상 구성·수량·셀 좌표 스캔 | 보상 추천 단계 시작 시 |
+| `recommend_rewards.py` | 유사 이벤트 비교 → 수량·아이템명 추천 + 보상 순서 패턴 학습·권장 (`--per-event` 플래그로 이벤트별 개별 테이블 출력) | 보상 스캔 완료 후 |
+| `_prep_sequential_review.py` | 보상 추천을 섹션별 순차 리뷰 큐로 변환 | recommend_rewards.py 완료 후 |
+| `apply_reward_changes.py` | 승인된 수량·명칭 변경을 output xlsx에 반영 | 섹션별 리뷰 완료 후 |
+| `analyze_event_patterns.py` | 이벤트 유형 빈도 갭 분석 | 보상 추천·승인 완료 직후 |
+| `crawl_gdrive_project.py` | Google Drive에서 xlsx 다운로드 + 학습 데이터 생성 | 최초 프로젝트 등록 또는 재크롤링 시 |
+| `upload_to_gsheets.py` | output xlsx를 Google Sheets로 업로드 | 보상 추천·승인 완료 직후 |
+| `save_learning.py` | 이번 실행 결과를 agent_learning.json에 누적 저장 | 완료 보고 직후 |
 
 ### 3-5. 주요 산출물 파일 형식
 
@@ -571,6 +761,146 @@ DONE
 }
 ```
 
+**`reward_recommendation.json`** — 이벤트별 보상 추천 결과
+```json
+{
+  "source_map": { "260625": "260611", "260702": "260618" },
+  "hist_tabs_scanned": ["260611", "260528", "260514", "260423"],
+  "tabs": {
+    "260625": [
+      {
+        "index": 0,
+        "event_title": "전반기 14일 출석 이벤트!",
+        "event_type": "출석_이벤트",
+        "similar_tabs": ["260611", "260528"],
+        "title_cell": "B10",
+        "start_row": 10,
+        "end_row": 30,
+        "order_type": {
+          "match_score": 0.95,
+          "has_order_issue": false,
+          "current_type_seq": ["골드", "선수 카드", "다이아", "강화권"],
+          "canonical_type_seq": ["골드", "선수 카드", "다이아", "강화권"],
+          "out_of_order": [],
+          "recommended_rows": []
+        },
+        "order_name": {
+          "match_score": 1.0,
+          "has_order_issue": false,
+          "current_type_seq": [],
+          "canonical_type_seq": [],
+          "out_of_order": [],
+          "recommended_rows": []
+        },
+        "rewards": [
+          {
+            "reward_name": "다이아",
+            "reward_type": "다이아",
+            "is_pack": false,
+            "item_cell": "AR12",
+            "qty_cell": "AS12",
+            "current_qty": 30,
+            "source_qty": 50,
+            "hist_avg": 50.0,
+            "recommendation": {
+              "action": "상향_권장",
+              "icon": "↑",
+              "reason": "유사 탭 평균 50개 대비 30개로 부족",
+              "suggested_qty": 50,
+              "suggested_name": null,
+              "sim_stats": { "avg": 50.0, "samples": 3 }
+            }
+          },
+          {
+            "reward_name": "15-26 리그 선택 다이아 확정 팩",
+            "reward_type": "리그 선택 다이아 확정 팩",
+            "is_pack": true,
+            "item_cell": "AR20",
+            "qty_cell": null,
+            "current_qty": null,
+            "recommendation": {
+              "action": "명칭_검토",
+              "icon": "📝",
+              "reason": "시즌 연도 패턴(NN-NN) 포함 — 연도 갱신 여부 확인 필요",
+              "suggested_qty": null,
+              "suggested_name": null,
+              "sim_stats": null
+            }
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+> **action 유형 요약**:
+> | action | 설명 |
+> |---|---|
+> | `유지` | 변경 불필요 |
+> | `상향_권장` | 역사 평균 대비 수량 부족 (±20% 기준) |
+> | `하향_검토` | 역사 평균 대비 수량 초과 |
+> | `명칭_검토` | 시즌 연도(`NN-NN`) 포함, 이력 대안 없음 → 수동 입력 필요 |
+> | `명칭_변경_권장` | 시즌 연도 포함 + 이력에서 다른 연도 버전 발견 → `suggested_name` 자동 설정 |
+>
+> **order_type / order_name 구조** (섹션 단위 순서 분석):
+> | 필드 | 타입 | 설명 |
+> |---|---|---|
+> | `match_score` | float | Kendall-tau 쌍 일치율 (0~1) |
+> | `has_order_issue` | bool | `true` = 순서 변경 권장 (< 0.75) |
+> | `current_type_seq` | [str] | 현재 보상 키 첫 등장 순서 |
+> | `canonical_type_seq` | [str] | 이력 정식 순서 (현재에 없는 키 제외 + 신규 키 뒤에) |
+> | `out_of_order` | [(key, cur_rank, rec_rank), ...] | 자리 이탈 항목 목록 |
+> | `recommended_rows` | [rr, ...] | 권장 순서로 재배열된 보상 행 |
+> - `order_type`: `reward_type` 키 기반 — 모든 섹션 적용
+> - `order_name`: 정규화 아이템명 기반 — 보상 수 ≤ 20행인 섹션만 적용 (나머지는 `match_score=1.0`)
+
+**`reward_review_queue.json`** — 이벤트 섹션별 순차 리뷰 큐
+```json
+{
+  "total_sections": 10,
+  "sections_with_changes": 3,
+  "reviewed": 0,
+  "queue": [
+    {
+      "global_idx": 1,
+      "tab": "260625",
+      "source_tab": "260611",
+      "event_index": 0,
+      "event_title": "전반기 14일 출석 이벤트!",
+      "event_type": "출석_이벤트",
+      "similar_tabs": ["260611", "260528"],
+      "title_cell": "B10",
+      "start_row": 10,
+      "end_row": 30,
+      "has_change": true,
+      "change_count": 1,
+      "name_review_count": 1,
+      "approved": false,
+      "approved_changes": [],
+      "rewards": [
+        {
+          "reward_name": "다이아",
+          "is_pack": false,
+          "item_cell": "AR12",
+          "qty_cell": "AS12",
+          "current_qty": 30,
+          "suggested_qty": 50,
+          "suggested_name": null,
+          "action": "상향_권장",
+          "icon": "↑",
+          "reason": "유사 탭 평균 50개 대비 부족",
+          "source_qty": 50,
+          "sim_avg": 50.0,
+          "sim_samples": 3,
+          "hist_avg": 50.0
+        }
+      ]
+    }
+  ]
+}
+```
+
 ### 3-6. Google API 연동 요건
 
 - **인증 방식**: OAuth 2.0 (개인 계정) 또는 서비스 계정 JSON 키
@@ -595,4 +925,9 @@ DONE
 | 키워드 확정 방식 | 웹서치 → AskUserQuestion 3지선다 | 자동 추천으로 편의성 확보, 요청자가 최종 결정권 유지 |
 | 참조 탭 선택 | AskUserQuestion (최신 3개 + 직접 입력) | 텍스트 입력 오류 방지, 사용 가능 탭을 직접 확인 후 선택 |
 | 보상 수량 결정 | 기존 탭 전체 스캔 → 유형별 평균 산출 | 수동 조사 없이 일관된 수량 기준 제공, 요청자 최종 승인 |
-| 보상 명칭 갱신 | AskUserQuestion (입력/없음) | 명칭 변경 필요 여부를 요청자가 명시적으로 결정 |
+| 보상 명칭 갱신 | 시즌 연도 패턴(`NN-NN`) 자동 탐지 + 이력 기반 추천 / 수동 입력 | 오탐 방지를 위해 비시즌 유사도 매칭 비활성화, 시즌 연도 항목만 자동 추천 |
+| 보상 검토 방식 | 섹션별 순차(1개씩) 제시 (`--per-event` 이벤트별 개별 테이블) | 한 번에 전체 보여주면 검토 부담 과중 — 섹션 단위로 분리해 집중 검토 |
+| 수량+명칭 동시 변경 | `apply_reward_changes.py`에서 `qty_cell`(수량)·`item_cell`(명칭) 모두 처리 | 하나의 스크립트로 수량·명칭 변경을 통합 처리, 코드 중복 방지 |
+| 비시즌 유사도 매칭 비활성 | `reward_type`이 "선수 카드 (일반/고급/최상급)" 등 다중 티어를 포괄해 오탐 발생 | 정확도 < 편의성 판단 — 완전 비활성화, 시즌 연도 패턴만 자동 추천 허용 |
+| 보상 순서 패턴 학습 | 이력 유사 섹션에서 Kendall-tau 기반 정식 순서 학습 → 일치율 < 0.75 시 🔄 권장 | 수동 규칙 없이 실제 데이터 패턴을 자동 학습; `reward_type`(전체)·아이템명(≤20행) 이중 분석으로 오탐 최소화 |
+| 순서 분석 이중 레벨 | `reward_type` 기반 + 정규화 아이템명 기반(≤20행 섹션만) | 시즌 연도 제거 후 이름 비교로 연도별 변동 보상에서도 순서 비교 가능; 행이 많은 섹션은 반복 항목으로 오탐 발생해 name 수준 비활성 |

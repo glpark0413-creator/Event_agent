@@ -64,7 +64,26 @@ OUTPUT_DIR = Path("output")
 OUTPUT_JSON_DIR = OUTPUT_DIR / "json"
 
 # ─── 섹션 패턴 ────────────────────────────────────────────────────────────────
-SECTION_PATTERN = re.compile(r"^\d+\.")
+# 두 가지 섹션 경계 형식 지원:
+#   1) "숫자." 패턴  예: "1. 포인트 레이스 이벤트"
+#   2) "이벤트 제목 :" 패턴  예: "이벤트 제목 : 올스타 직행! 14일 출석 이벤트!"
+SECTION_PATTERN       = re.compile(r"^\d+\.")
+EVENT_TITLE_PATTERN   = re.compile(r"^이벤트\s*제목\s*:\s*(.+)$")
+
+
+def parse_section_title(val: str) -> "str | None":
+    """B열 셀 값이 섹션 경계이면 정규화된 이벤트 제목을 반환, 아니면 None.
+
+    - '숫자.' 패턴  → 값 그대로 반환  (예: '1. 포인트 레이스 이벤트')
+    - '이벤트 제목 :' 패턴 → 콜론 이후 실제 제목만 추출
+      (예: '이벤트 제목 : 올스타 직행! 14일 출석 이벤트!' → '올스타 직행! 14일 출석 이벤트!')
+    """
+    if SECTION_PATTERN.match(val):
+        return val
+    m = EVENT_TITLE_PATTERN.match(val)
+    if m:
+        return m.group(1).strip()
+    return None
 
 # ─── 이벤트 유형 정규화 키워드 (공통 + 장르별) ───────────────────────────────
 EVENT_TYPE_KEYWORDS = [
@@ -166,10 +185,11 @@ def extract_event_sections(ws) -> list[dict]:
             if not val:
                 continue
             val_str = str(val).strip()
-            if SECTION_PATTERN.match(val_str):
+            title = parse_section_title(val_str)
+            if title is not None:
                 sections.append({
-                    "title": val_str,
-                    "event_type": normalize_event_type(val_str),
+                    "title": title,
+                    "event_type": normalize_event_type(title),
                     "cell": getattr(cell, "coordinate", f"B{getattr(cell, 'row', '?')}"),
                     "row": getattr(cell, "row", None),
                 })

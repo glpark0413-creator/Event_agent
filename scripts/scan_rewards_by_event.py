@@ -49,17 +49,35 @@ def _resolve_source() -> str:
 
 SOURCE = _resolve_source()
 
-import sys as _sys_srbe
-_sys_srbe.path.insert(0, str(Path(__file__).resolve().parent))
-from _project_config import load_project_paths as _load_paths_srbe
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _project_config import load_project_paths
 
-_paths_srbe = _load_paths_srbe()
+_paths = load_project_paths()
 
 OUTPUT_DIR = Path("output")
 OUTPUT_JSON_DIR = OUTPUT_DIR / "json"
 
-# ─── 이벤트 섹션 패턴 (B열 "숫자." 로 시작) ───────────────────────────────
-SECTION_PATTERN = re.compile(r"^\d+\.")
+# ─── 이벤트 섹션 패턴 ────────────────────────────────────────────────────────
+# 두 가지 섹션 경계 형식 지원:
+#   1) "숫자." 패턴  예: "1. 포인트 레이스 이벤트"
+#   2) "이벤트 제목 :" 패턴  예: "이벤트 제목 : 올스타 직행! 14일 출석 이벤트!"
+SECTION_PATTERN       = re.compile(r"^\d+\.")
+EVENT_TITLE_PATTERN   = re.compile(r"^이벤트\s*제목\s*:\s*(.+)$")
+
+
+def parse_section_title(val: str) -> "str | None":
+    """B열 셀 값이 섹션 경계이면 정규화된 이벤트 제목을 반환, 아니면 None.
+
+    - '숫자.' 패턴  → 값 그대로 반환  (예: '1. 포인트 레이스 이벤트')
+    - '이벤트 제목 :' 패턴 → 콜론 이후 실제 제목만 추출
+      (예: '이벤트 제목 : 올스타 직행! 14일 출석 이벤트!' → '올스타 직행! 14일 출석 이벤트!')
+    """
+    if SECTION_PATTERN.match(val):
+        return val
+    m = EVENT_TITLE_PATTERN.match(val)
+    if m:
+        return m.group(1).strip()
+    return None
 
 # ─── 이벤트 유형 정규화 (공통 + 장르별) ────────────────────────────────────
 EVENT_TYPE_KEYWORDS = [
@@ -127,7 +145,7 @@ SKIP_PREFIXES = ("∎", "※", "·", "①", "②", "③", "④", "◆", "▶", "
 # 앞으로 [보상 아이템] / [보상 수량] 컬럼명을 표준으로 사용.
 # 현재 파일(보상 아이템 / 수량)도 하위 호환 지원.
 REWARD_ITEM_HEADERS: frozenset = frozenset({"[보상 아이템]", "보상 아이템"})
-REWARD_QTY_HEADERS:  frozenset = frozenset({"[보상 수량]",  "수량"})
+REWARD_QTY_HEADERS:  frozenset = frozenset({"[보상 수량]",  "보상 수량", "수량"})
 
 # ─── 수량 패턴 ───────────────────────────────────────────────────────────
 QTY_PATTERNS = [
@@ -359,11 +377,15 @@ def scan_tab_by_section(ws) -> list:
         return []
 
     # ② 섹션 경계 탐색 (B열 = column 2)
+    # '숫자.' 패턴 또는 '이벤트 제목 :' 패턴 모두 인식
     section_starts: list[tuple[int, str, str]] = []  # (row_num, coord, title)
     for row_num in sorted(rows_data.keys()):
         b_cell = rows_data[row_num].get(2)
-        if b_cell and SECTION_PATTERN.match(b_cell[1]):
-            section_starts.append((row_num, b_cell[0], b_cell[1]))
+        if not b_cell:
+            continue
+        title = parse_section_title(b_cell[1])
+        if title is not None:
+            section_starts.append((row_num, b_cell[0], title))
 
     if not section_starts:
         return []
@@ -479,14 +501,14 @@ def build_event_type_patterns(all_tab_sections: dict) -> dict:
 
 
 def main(source: str = SOURCE, out_path: str | None = None):
-    if _paths_srbe:
-        _paths_srbe.ensure_dirs()
+    if _paths:
+        _paths.ensure_dirs()
     OUTPUT_DIR.mkdir(exist_ok=True)
     OUTPUT_JSON_DIR.mkdir(exist_ok=True)
 
     if out_path is None:
-        if _paths_srbe:
-            out_path = str(_paths_srbe.reward_by_event)
+        if _paths:
+            out_path = str(_paths.reward_by_event)
         else:
             out_path = str(OUTPUT_JSON_DIR / "reward_by_event.json")
 
@@ -537,8 +559,8 @@ if __name__ == "__main__":
     src = sys.argv[1] if len(sys.argv) > 1 else SOURCE
     if len(sys.argv) >= 3:
         out = sys.argv[2]
-    elif _paths_srbe:
-        out = str(_paths_srbe.reward_by_event)
+    elif _paths:
+        out = str(_paths.reward_by_event)
     else:
         out = None
     main(src, out)
